@@ -1,42 +1,45 @@
 from pprint import pprint
 
+from langchain_community.document_loaders import WebBaseLoader
 from langchain_community.vectorstores import Chroma
 from langchain_openai import OpenAIEmbeddings
 
 model_name = 'gpt-4o-mini'
 embd = OpenAIEmbeddings()
 
-# urls = [
-#     "https://lilianweng.github.io/posts/2023-06-23-agent/",
-#     "https://lilianweng.github.io/posts/2023-03-15-prompt-engineering/",
-#     "https://lilianweng.github.io/posts/2023-10-25-adv-attack-llm/",
-# ]
-#
-# docs = [WebBaseLoader(url).load() for url in urls]
-# docs_list = [item for sublist in docs for item in sublist]
-#
+urls = [
+    "https://lilianweng.github.io/posts/2023-06-23-agent/",
+    "https://lilianweng.github.io/posts/2023-03-15-prompt-engineering/",
+    "https://lilianweng.github.io/posts/2023-10-25-adv-attack-llm/",
+]
+
+docs = [WebBaseLoader(url).load() for url in urls]
+docs_list = [item for sublist in docs for item in sublist]
+
 # text_splitter = RecursiveCharacterTextSplitter.from_tiktoken_encoder(
 #     chunk_size=250, chunk_overlap=0
 # )
 # doc_splits = text_splitter.split_documents(docs_list)
-# #
-# # # Add to vectorDB
+#
+# # Add to vectorDB
 # Chroma.from_documents(
 #     documents=doc_splits,
-#     collection_name="corrective_rag",
+#     collection_name="self_rag",
 #     embedding=OpenAIEmbeddings(),
 #     persist_directory='./chroma_db'
 # )
 
 vectorstore = Chroma(
-    collection_name="corrective_rag",
+    collection_name="self_rag",
     persist_directory='./chroma_db',
     embedding_function=embd,
 )
 
 retriever = vectorstore.as_retriever()
 
+#############################################################################
 ### Retrieval Grader
+
 
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_openai import ChatOpenAI
@@ -59,7 +62,8 @@ structured_llm_grader = llm.with_structured_output(GradeDocuments)
 
 # Prompt
 system = """You are a grader assessing relevance of a retrieved document to a user question. \n 
-    If the document contains keyword(s) or semantic meaning related to the question, grade it as relevant. \n
+    It does not need to be a stringent test. The goal is to filter out erroneous retrievals. \n
+    If the document contains keyword(s) or semantic meaning related to the user question, grade it as relevant. \n
     Give a binary score 'yes' or 'no' score to indicate whether the document is relevant to the question."""
 grade_prompt = ChatPromptTemplate.from_messages(
     [
@@ -69,7 +73,7 @@ grade_prompt = ChatPromptTemplate.from_messages(
 )
 
 retrieval_grader = grade_prompt | structured_llm_grader
-# question = "agent memory"
+question = "agent memory"
 # docs = retriever.invoke(question)
 # doc_txt = docs[1].page_content
 # print(retrieval_grader.invoke({"question": question, "document": doc_txt}))
@@ -96,17 +100,79 @@ def format_docs(docs):
 rag_chain = prompt | llm | StrOutputParser()
 
 # Run
-# generation = rag_chain.invoke({"context": docs, "question": question})
-# print(generation)
+generation = rag_chain.invoke({"context": docs, "question": question})
+print(generation)
+
+
+### Hallucination Grader
+
+
+# Data model
+class GradeHallucinations(BaseModel):
+    """Binary score for hallucination present in generation answer."""
+
+    binary_score: str = Field(
+        description="Answer is grounded in the facts, 'yes' or 'no'"
+    )
+
+
+# LLM with function call
+llm = ChatOpenAI(model=model_name, temperature=0)
+structured_llm_grader = llm.with_structured_output(GradeHallucinations)
+
+# Prompt
+system = """You are a grader assessing whether an LLM generation is grounded in / supported by a set of retrieved facts. \n 
+     Give a binary score 'yes' or 'no'. 'Yes' means that the answer is grounded in / supported by the set of facts."""
+hallucination_prompt = ChatPromptTemplate.from_messages(
+    [
+        ("system", system),
+        ("human", "Set of facts: \n\n {documents} \n\n LLM generation: {generation}"),
+    ]
+)
+
+hallucination_grader = hallucination_prompt | structured_llm_grader
+
+
+# print(hallucination_grader.invoke({"documents": docs, "generation": generation}))
+
+
+### Answer Grader
+
+
+# Data model
+class GradeAnswer(BaseModel):
+    """Binary score to assess answer addresses question."""
+
+    binary_score: str = Field(
+        description="Answer addresses the question, 'yes' or 'no'"
+    )
+
+
+# LLM with function call
+llm = ChatOpenAI(model=model_name, temperature=0)
+structured_llm_grader = llm.with_structured_output(GradeAnswer)
+
+# Prompt
+system = """You are a grader assessing whether an answer addresses / resolves a question \n 
+     Give a binary score 'yes' or 'no'. Yes' means that the answer resolves the question."""
+answer_prompt = ChatPromptTemplate.from_messages(
+    [
+        ("system", system),
+        ("human", "User question: \n\n {question} \n\n LLM generation: {generation}"),
+    ]
+)
+
+answer_grader = answer_prompt | structured_llm_grader
+print(answer_grader.invoke({"question": question, "generation": generation}))
 
 ### Question Re-writer
 
 # LLM
-llm = ChatOpenAI(model=model_name, temperature=0)
+llm = ChatOpenAI(model="gpt-3.5-turbo-0125", temperature=0)
 
 # Prompt
 system = """You a question re-writer that converts an input question to a better version that is optimized \n 
-     for web search. Look at the input and try to reason about the underlying semantic intent / meaning."""
+     for vectorstore retrieval. Look at the input and try to reason about the underlying semantic intent / meaning."""
 re_write_prompt = ChatPromptTemplate.from_messages(
     [
         ("system", system),
@@ -118,14 +184,7 @@ re_write_prompt = ChatPromptTemplate.from_messages(
 )
 
 question_rewriter = re_write_prompt | llm | StrOutputParser()
-# print(question_rewriter.invoke({"question": question}))
-
-
-### Search
-
-from langchain_community.tools.tavily_search import TavilySearchResults
-
-web_search_tool = TavilySearchResults(k=3)
+print(question_rewriter.invoke({"question": question}))
 
 from typing import List
 
@@ -139,17 +198,15 @@ class GraphState(TypedDict):
     Attributes:
         question: question
         generation: LLM generation
-        web_search: whether to add search
         documents: list of documents
     """
 
     question: str
     generation: str
-    web_search: str
     documents: List[str]
 
 
-from langchain.schema import Document
+### Nodes
 
 
 def retrieve(state):
@@ -212,17 +269,12 @@ def grade_documents(state):
         )
         grade = score.binary_score
         if grade == "yes":
-            filtered_docs.append(d)
             print("---GRADE: DOCUMENT RELEVANT---")
+            filtered_docs.append(d)
         else:
             print("---GRADE: DOCUMENT NOT RELEVANT---")
             continue
-
-    if len(filtered_docs) > 0:
-        web_search = "No"
-    else:
-        web_search = "Yes"
-    return {"documents": filtered_docs, "question": question, "web_search": web_search}
+    return {"documents": filtered_docs, "question": question}
 
 
 def transform_query(state):
@@ -245,30 +297,6 @@ def transform_query(state):
     return {"documents": documents, "question": better_question}
 
 
-def web_search(state):
-    """
-    Web search based on the re-phrased question.
-
-    Args:
-        state (dict): The current graph state
-
-    Returns:
-        state (dict): Updates documents key with appended web results
-    """
-
-    print("---WEB SEARCH---")
-    question = state["question"]
-    documents = state["documents"]
-
-    # Web search
-    docs = web_search_tool.invoke({"query": question})
-    web_results = "\n".join([d["content"] for d in docs])
-    web_results = Document(page_content=web_results)
-    documents.append(web_results)
-
-    return {"documents": documents, "question": question}
-
-
 ### Edges
 
 
@@ -284,8 +312,10 @@ def decide_to_generate(state):
     """
 
     print("---ASSESS GRADED DOCUMENTS---")
-    web_search = state["web_search"]
-    if web_search == "Yes":
+    state["question"]
+    filtered_documents = state["documents"]
+
+    if not filtered_documents:
         # All documents have been filtered check_relevance
         # We will re-generate a new query
         print(
@@ -298,6 +328,45 @@ def decide_to_generate(state):
         return "generate"
 
 
+def grade_generation_v_documents_and_question(state):
+    """
+    Determines whether the generation is grounded in the document and answers question.
+
+    Args:
+        state (dict): The current graph state
+
+    Returns:
+        str: Decision for next node to call
+    """
+
+    print("---CHECK HALLUCINATIONS---")
+    question = state["question"]
+    documents = state["documents"]
+    generation = state["generation"]
+
+    score = hallucination_grader.invoke(
+        {"documents": documents, "generation": generation}
+    )
+    grade = score.binary_score
+
+    # Check hallucination
+    if grade == "yes":
+        print("---DECISION: GENERATION IS GROUNDED IN DOCUMENTS---")
+        # Check question-answering
+        print("---GRADE GENERATION vs QUESTION---")
+        score = answer_grader.invoke({"question": question, "generation": generation})
+        grade = score.binary_score
+        if grade == "yes":
+            print("---DECISION: GENERATION ADDRESSES QUESTION---")
+            return "useful"
+        else:
+            print("---DECISION: GENERATION DOES NOT ADDRESS QUESTION---")
+            return "not useful"
+    else:
+        pprint("---DECISION: GENERATION IS NOT GROUNDED IN DOCUMENTS, RE-TRY---")
+        return "not supported"
+
+
 from langgraph.graph import END, StateGraph, START
 
 workflow = StateGraph(GraphState)
@@ -307,7 +376,6 @@ workflow.add_node("retrieve", retrieve)  # retrieve
 workflow.add_node("grade_documents", grade_documents)  # grade documents
 workflow.add_node("generate", generate)  # generatae
 workflow.add_node("transform_query", transform_query)  # transform_query
-workflow.add_node("web_search_node", web_search)  # web search
 
 # Build graph
 workflow.add_edge(START, "retrieve")
@@ -320,21 +388,30 @@ workflow.add_conditional_edges(
         "generate": "generate",
     },
 )
-workflow.add_edge("transform_query", "web_search_node")
-workflow.add_edge("web_search_node", "generate")
-workflow.add_edge("generate", END)
+workflow.add_edge("transform_query", "retrieve")
+workflow.add_conditional_edges(
+    "generate",
+    grade_generation_v_documents_and_question,
+    {
+        "not supported": "generate",
+        "useful": END,
+        "not useful": "transform_query",
+    },
+)
 
 # Compile
 app = workflow.compile()
 
 try:
-    app.get_graph(xray=True).draw_png('corrective_rag.png')
+    app.get_graph(xray=True).draw_png('self_rag.png')
 except Exception:
     # This requires some extra dependencies and is optional
     pass
 
+from pprint import pprint
+
 # Run
-# inputs = {"question": "What is an AI agent?"}
+# inputs = {"question": "Explain how AI agent works ?"}
 # for output in app.stream(inputs):
 #     for key, value in output.items():
 #         # Node
@@ -345,9 +422,8 @@ except Exception:
 #
 # # Final generation
 # pprint(value["generation"])
-
-# Run
-inputs = {"question": "How does the AlphaCodium paper work?"}
+#
+inputs = {"question": "Explain how chain of thought prompting works?"}
 for output in app.stream(inputs):
     for key, value in output.items():
         # Node
