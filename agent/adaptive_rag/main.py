@@ -1,18 +1,18 @@
 ### Build Index
-from pprint import pprint
 
 from langchain_community.document_loaders import WebBaseLoader
 from langchain_core.runnables.graph_png import PngDrawer
+from langchain_openai import OpenAIEmbeddings
 
 model = 'gpt-4o-mini'
+embd = OpenAIEmbeddings()
 
 from langchain_community.vectorstores import Chroma
-from langchain_openai import OpenAIEmbeddings
 
 ### from langchain_cohere import CohereEmbeddings
 
 # Set embeddings
-embd = OpenAIEmbeddings()
+
 
 # # Docs to index
 urls = [
@@ -146,6 +146,7 @@ def format_docs(docs):
 # Chain
 rag_chain = prompt | llm | StrOutputParser()
 
+
 # Run
 # generation = rag_chain.invoke({"context": docs, "question": question})
 # print(generation)
@@ -178,6 +179,8 @@ hallucination_prompt = ChatPromptTemplate.from_messages(
 )
 
 hallucination_grader = hallucination_prompt | structured_llm_grader
+
+
 # hallucination_result = hallucination_grader.invoke({"documents": docs, "generation": generation})
 # print(hallucination_result)
 
@@ -507,8 +510,12 @@ workflow.add_conditional_edges(
 # Compile
 app = workflow.compile()
 
-drawer = PngDrawer()
-drawer.draw(app.get_graph(), 'graph.png')
+
+try:
+    app.get_graph(xray=True).draw_png('agentic_rag.png')
+except Exception:
+    # This requires some extra dependencies and is optional
+    pass
 
 from pprint import pprint
 
@@ -538,4 +545,3 @@ for output in app.stream(inputs):
 
 # Final generation
 pprint(value["generation"])
-
