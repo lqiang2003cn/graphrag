@@ -1,7 +1,8 @@
 from langchain_community.vectorstores import Chroma
 from langchain_openai import OpenAIEmbeddings
 
-
+model_name = 'gpt-4o-mini'
+embd = OpenAIEmbeddings()
 
 # urls = [
 #     "https://lilianweng.github.io/posts/2023-06-23-agent/",
@@ -25,8 +26,6 @@ from langchain_openai import OpenAIEmbeddings
 #     persist_directory='./chroma_db'
 # )
 
-model_name = 'gpt-4o-mini'
-embd = OpenAIEmbeddings()
 
 vectorstore = Chroma(
     collection_name="agentic_rag",
@@ -34,6 +33,10 @@ vectorstore = Chroma(
     embedding_function=embd,
 )
 retriever = vectorstore.as_retriever()
+
+
+###########################################################################################################
+
 
 from langchain.tools.retriever import create_retriever_tool
 
@@ -277,7 +280,7 @@ import pprint
 
 inputs = {
     "messages": [
-        ("user", "Who is Micheal Jordan"),
+        ("user", "What does Lilian Weng say about the types of agent memory?"),
     ]
 }
 for output in graph.stream(inputs):
