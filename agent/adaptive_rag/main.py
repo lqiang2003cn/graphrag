@@ -512,7 +512,7 @@ app = workflow.compile()
 
 
 try:
-    app.get_graph(xray=True).draw_png('agentic_rag.png')
+    app.get_graph(xray=True).draw_png('adaptive_rag.png')
 except Exception:
     # This requires some extra dependencies and is optional
     pass
@@ -533,7 +533,7 @@ from pprint import pprint
 #
 # # Final generation
 # pprint(value["generation"])
-
+#
 inputs = {"question": "What are the types of agent memory?"}
 for output in app.stream(inputs):
     for key, value in output.items():
